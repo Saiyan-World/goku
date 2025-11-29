@@ -1,0 +1,158 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Goku Follows & Fights</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <style>body{margin:0;background:#111;overflow:hidden;color:#fff;font-family:Inter,Segoe UI,Helvetica,Arial,sans-serif}#ui{position:fixed;left:12px;top:12px;font-size:14px}</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="ui">Use WASD or arrows to move. Space = command Goku dash. Enemies spawn every 2s. Player HP: <span id="hp">100</span></div>
+<script>
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+function resize(){ canvas.width = innerWidth; canvas.height = innerHeight; }
+addEventListener('resize', resize); resize();
+
+// Game objects
+const player = { x: canvas.width/2, y: canvas.height/2, w:26, h:26, speed: 220, hp:100 };
+const goku = { x: player.x - 120, y: player.y - 80, r:18, speed: 160, state:'follow', dashCooldown:0, dashTarget:null, dashSpeed:700 };
+let enemies = [];
+let lastTime = performance.now();
+const keys = {};
+addEventListener('keydown', e => { keys[e.key.toLowerCase()] = true; if (e.code === 'Space') e.preventDefault(); });
+addEventListener('keyup', e => keys[e.key.toLowerCase()] = false);
+
+// Spawn enemies
+let spawnTimer = 0;
+function spawnEnemy(){
+  // spawn outside screen at random edge
+  const side = Math.floor(Math.random()*4);
+  let x, y;
+  if (side===0){ x = -20; y = Math.random()*canvas.height; }
+  else if (side===1){ x = canvas.width+20; y = Math.random()*canvas.height; }
+  else if (side===2){ x = Math.random()*canvas.width; y = -20; }
+  else { x = Math.random()*canvas.width; y = canvas.height+20; }
+  enemies.push({ x, y, r:14, speed: 70 + Math.random()*30, hp: 3 });
+}
+
+// Helper: distance
+function dist(a,b){ return Math.hypot(a.x-b.x, a.y-b.y); }
+
+function update(dt){
+  // Player movement
+  let ax=0, ay=0;
+  if (keys['arrowup']||keys['w']) ay -= 1;
+  if (keys['arrowdown']||keys['s']) ay += 1;
+  if (keys['arrowleft']||keys['a']) ax -= 1;
+  if (keys['arrowright']||keys['d']) ax += 1;
+  const len = Math.hypot(ax,ay);
+  if (len>0){ ax/=len; ay/=len; }
+  player.x += ax * player.speed * dt;
+  player.y += ay * player.speed * dt;
+  player.x = Math.max(10, Math.min(canvas.width-10, player.x));
+  player.y = Math.max(10, Math.min(canvas.height-10, player.y));
+
+  // Spawn logic
+  spawnTimer += dt;
+  if (spawnTimer > 2){ spawnTimer = 0; spawnEnemy(); }
+
+  // Enemies chase player
+  for (let e of enemies){
+    const dx = player.x - e.x, dy = player.y - e.y;
+    const d = Math.hypot(dx,dy) || 1;
+    e.x += (dx/d) * e.speed * dt;
+    e.y += (dy/d) * e.speed * dt;
+    // Damage player on contact
+    if (Math.hypot(e.x - player.x, e.y - player.y) < e.r + player.w/2){
+      player.hp -= 15 * dt; // per second
+      player.hp = Math.max(0, player.hp);
+    }
+  }
+
+  // Remove dead enemies
+  enemies = enemies.filter(e => e.hp > 0);
+
+  // Goku dash command
+  if ((keys[' '] || keys['space']) && goku.dashCooldown <= 0){
+    // find nearest enemy
+    if (enemies.length > 0){
+      let nearest = null, md = 1e9;
+      for (let e of enemies){ const d = Math.hypot(e.x - goku.x, e.y - goku.y); if (d < md){ md = d; nearest = e; }}
+      if (nearest){ goku.state = 'dash'; goku.dashTarget = nearest; goku.dashCooldown = 1.2; }
+    }
+  }
+
+  // Goku state machine
+  if (goku.state === 'dash'){
+    const t = goku.dashTarget;
+    if (!t || t.hp <= 0){ goku.state = 'follow'; goku.dashTarget = null; }
+    else {
+      const dx = t.x - goku.x, dy = t.y - goku.y; const d = Math.hypot(dx,dy)||1;
+      const vx = (dx/d) * goku.dashSpeed, vy = (dy/d) * goku.dashSpeed;
+      goku.x += vx * dt; goku.y += vy * dt;
+      // On hit
+      if (Math.hypot(goku.x - t.x, goku.y - t.y) < goku.r + t.r){
+        t.hp -= 3; // big damage
+        goku.state = 'stagger';
+        goku.staggerTimer = 0.3;
+        goku.dashTarget = null;
+      }
+    }
+  } else if (goku.state === 'stagger'){
+    goku.staggerTimer -= dt;
+    if (goku.staggerTimer <= 0) goku.state = 'follow';
+  } else {
+    // follow: move toward a position slightly behind player
+    const target = { x: player.x - 80, y: player.y - 40 };
+    const dx = target.x - goku.x, dy = target.y - goku.y; const d = Math.hypot(dx,dy)||1;
+    const nx = dx/d, ny = dy/d;
+    goku.x += nx * goku.speed * dt;
+    goku.y += ny * goku.speed * dt;
+    // Auto attack enemies in range
+    for (let e of enemies){
+      const d2 = Math.hypot(e.x - goku.x, e.y - goku.y);
+      if (d2 < goku.r + e.r + 6){
+        // damage over time
+        e.hp -= 3 * dt; // 3 HP per second
+      }
+    }
+  }
+
+  // Reduce dash cooldown
+  if (goku.dashCooldown > 0) goku.dashCooldown -= dt;
+
+  // Update UI
+  document.getElementById('hp').textContent = Math.max(0, Math.round(player.hp));
+}
+
+function draw(){
+  ctx.clearRect(0,0,canvas.width,canvas.height);
+  // Player
+  ctx.fillStyle = '#3aa0ff';
+  ctx.fillRect(player.x - player.w/2, player.y - player.h/2, player.w, player.h);
+  // Goku
+  ctx.beginPath(); ctx.fillStyle = '#ff9a2e'; ctx.arc(goku.x, goku.y, goku.r, 0, Math.PI*2); ctx.fill();
+  // Enemies
+  for (let e of enemies){
+    ctx.beginPath(); ctx.fillStyle = '#e84c4c'; ctx.arc(e.x, e.y, e.r, 0, Math.PI*2); ctx.fill();
+    // hp bar
+    ctx.fillStyle = '#222'; ctx.fillRect(e.x-12, e.y-20, 24,4);
+    ctx.fillStyle = '#4caf50'; ctx.fillRect(e.x-12, e.y-20, 24 * (e.hp/3), 4);
+  }
+  // HUD: dash cooldown
+  ctx.fillStyle = 'rgba(255,255,255,0.08)'; ctx.fillRect(12,60,120,18);
+  ctx.fillStyle = '#fff'; ctx.font='12px sans-serif'; ctx.fillText('Goku Dash CD: ' + Math.max(0, goku.dashCooldown.toFixed(1)), 16, 74);
+}
+
+function loop(now){
+  const dt = Math.min((now - lastTime)/1000, 0.05);
+  lastTime = now;
+  update(dt); draw();
+  requestAnimationFrame(loop);
+}
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
